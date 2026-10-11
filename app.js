@@ -466,6 +466,7 @@ function navAndClose(viewId) {
       loadTeacherCounselRequests();
       loadExamSchedules();
       renderMinimumCheckAnalysis();
+           loadSeatingData();
       lucide.createIcons();
     }
 
@@ -505,6 +506,8 @@ function navAndClose(viewId) {
         loadTeacherForumsData();
       } else if (viewId === 'admissionBriefing') {
         loadBriefingFoldersData();
+             } else if (viewId === 'seating') {
+     loadSeatingData();
       }
 
       window.scrollTo({ top: 0, behavior: 'smooth' });
@@ -5861,6 +5864,7 @@ function closeCalendarEventDetail() {
         { id: 'calendarEventDetailModal', closeFn: closeCalendarEventDetail },
         { id: 'teacherCardEditModal', closeFn: closeTeacherCardEditModal },
         { id: 'songRecommendModal', closeFn: closeSongRecommendModal },
+             { id: 'teacherSeatModal', closeFn: closeSeatModal },
         { id: 'dailySongManageModal', closeFn: closeDailySongManageModal }
       ];
 
@@ -6431,4 +6435,688 @@ async function saveDailySongDirect() {
   alert(`오늘의 노래 [${title}]이(가) 메인 화면에 등록되었습니다! 🎵`);
   closeDailySongManageModal();
   loadDailySong();
+}
+
+// =================================================================
+// 💡 [학급지도: 자리배치표] Supabase 연동 및 반응형 엔진
+// =================================================================
+let seatingViewMode = 'student';
+let seatingLayoutMode = 'pair';
+let seatingWallOrientation = 'leftHallway';
+let seatingTotalSeats = 30;
+let seatingAssignments = {};
+let currentSeatingDoc = null;
+let selectedModalSeatNum = null;
+
+async function loadSeatingData() {
+  const targetClass = (activeClassNum === 'all') ? 2 : activeClassNum;
+  const isTeacher = isCurrentTeacher();
+
+  const badgeEl = document.getElementById('seatingClassBadge');
+  if (badgeEl) badgeEl.innerText = `3-${targetClass}`;
+
+  const cfgBtn = document.getElementById('btnToggleSeatingSetting');
+  const editMsgBtn = document.getElementById('btnEditSeatingMessage');
+  if (isTeacher) {
+    if (cfgBtn) cfgBtn.classList.remove('hidden');
+    if (editMsgBtn) editMsgBtn.classList.remove('hidden');
+  } else {
+    if (cfgBtn) cfgBtn.classList.add('hidden');
+    if (editMsgBtn) editMsgBtn.classList.add('hidden');
+    const panel = document.getElementById('seatingTeacherPanel');
+    if (panel) panel.classList.add('hidden');
+  }
+
+  const { data, error } = await supabaseClient
+    .from('seating_charts')
+    .select('*')
+    .eq('class_num', targetClass)
+    .single();
+
+  if (error || !data) {
+    const today = new Date();
+    const y = today.getFullYear();
+    const m = String(today.getMonth() + 1).padStart(2, '0');
+    const lastDay = new Date(y, today.getMonth() + 1, 0).getDate();
+
+    currentSeatingDoc = {
+      class_num: targetClass,
+      grade: 3,
+      period_start: `${y}-${m}-01`,
+      period_end: `${y}-${m}-${lastDay}`,
+      teacher_name: isTeacher ? currentProfile.name : '담임교사',
+      president_name: '',
+      vice_name: '',
+      teacher_message: '새로운 자리에서 옆 짝꿍과 서로 존중하고 협력하며 알찬 한 달을 보냅시다.',
+      wall_orientation: 'leftHallway',
+      layout_mode: 'pair',
+      total_seats: 30,
+      assignments: {}
+    };
+  } else {
+    currentSeatingDoc = data;
+  }
+
+  seatingWallOrientation = currentSeatingDoc.wall_orientation || 'leftHallway';
+  seatingLayoutMode = currentSeatingDoc.layout_mode || 'pair';
+  seatingTotalSeats = currentSeatingDoc.total_seats || 30;
+  seatingAssignments = currentSeatingDoc.assignments || {};
+
+  const sStart = document.getElementById('cfgStartDate');
+  const sEnd = document.getElementById('cfgEndDate');
+  if (sStart) sStart.value = currentSeatingDoc.period_start || '';
+  if (sEnd) sEnd.value = currentSeatingDoc.period_end || '';
+  const gIn = document.getElementById('cfgGrade');
+  const cIn = document.getElementById('cfgClass');
+  if (gIn) gIn.value = currentSeatingDoc.grade || 3;
+  if (cIn) cIn.value = currentSeatingDoc.class_num || targetClass;
+  const tIn = document.getElementById('cfgTeacher');
+  if (tIn) tIn.value = currentSeatingDoc.teacher_name || '';
+  const pIn = document.getElementById('cfgPresident');
+  if (pIn) pIn.value = currentSeatingDoc.president_name || '';
+  const vIn = document.getElementById('cfgVice');
+  if (vIn) vIn.value = currentSeatingDoc.vice_name || '';
+  const cntIn = document.getElementById('seatCountInput');
+  if (cntIn) cntIn.value = seatingTotalSeats;
+
+  renderSeatingAll();
+}
+
+function renderSeatingAll() {
+  const targetClass = (activeClassNum === 'all') ? 2 : activeClassNum;
+  const g = currentSeatingDoc?.grade || 3;
+  const sStart = currentSeatingDoc?.period_start;
+  const sEnd = currentSeatingDoc?.period_end;
+  let periodText = '';
+  if (sStart && sEnd) {
+    const sm = parseInt(sStart.substring(5, 7));
+    const sd = parseInt(sStart.substring(8, 10));
+    const em = parseInt(sEnd.substring(5, 7));
+    const ed = parseInt(sEnd.substring(8, 10));
+    periodText = ` (${sm}월 ${sd}일 ~ ${em}월 ${ed}일)`;
+  }
+
+  const title = `${g}학년 ${targetClass}반 자리배치표${periodText}`;
+  const liveTitle = document.getElementById('seatingLiveTitle');
+  const boardTitle = document.getElementById('seatingBoardMainTitle');
+  if (liveTitle) liveTitle.innerText = title;
+  if (boardTitle) boardTitle.innerText = title;
+
+  const dt = document.getElementById('dispSeatingTeacher');
+  const dp = document.getElementById('dispSeatingPresident');
+  const dv = document.getElementById('dispSeatingVice');
+  if (dt) dt.innerText = currentSeatingDoc?.teacher_name || '-';
+  if (dp) dp.innerText = currentSeatingDoc?.president_name || '-';
+  if (dv) dv.innerText = currentSeatingDoc?.vice_name || '-';
+
+  const msgEl = document.getElementById('seatingMessageDisplay');
+  if (msgEl) msgEl.innerText = currentSeatingDoc?.teacher_message || '새로운 자리에서 함께 힘을 내봅시다.';
+
+  renderSeatingDeskAndBack();
+  renderSeatingWalls();
+  renderSeatingGrid();
+  renderSeatingRoster();
+  updateSeatingStudentStatus();
+  lucide.createIcons();
+}
+
+function renderSeatingDeskAndBack() {
+  const topArea = document.getElementById('seatingTopBoardArea');
+  const bottomArea = document.getElementById('seatingBottomBoardArea');
+  const indicator = document.getElementById('seatingViewModeIndicator');
+
+  const boardHtml = `
+    <div class="w-full py-1.5 bg-slate-900 text-white rounded-lg text-center text-xs font-black tracking-widest shadow-xs border border-slate-800 flex items-center justify-center gap-3">
+      <span>칠 판 (Front)</span>
+      <span class="text-slate-400">|</span>
+      <span class="text-amber-400">교 탁</span>
+    </div>
+  `;
+  const backHtml = `
+    <div class="w-full py-1 bg-slate-100 text-slate-500 rounded-lg text-center text-[10px] font-bold border border-dashed border-slate-300 flex items-center justify-center">
+      <span>교실 뒤편 (Back)</span>
+    </div>
+  `;
+
+  if (seatingViewMode === 'student') {
+    if (topArea) topArea.innerHTML = boardHtml;
+    if (bottomArea) bottomArea.innerHTML = backHtml;
+    if (indicator) indicator.innerText = '[학생 기준 시점] 칠판 앞쪽';
+  } else {
+    if (topArea) topArea.innerHTML = backHtml;
+    if (bottomArea) bottomArea.innerHTML = boardHtml;
+    if (indicator) indicator.innerText = '[교탁 부착용] 교탁 기준 (180° 반전)';
+  }
+}
+
+function renderSeatingWalls() {
+  const leftWall = document.getElementById('seatingLeftWall');
+  const rightWall = document.getElementById('seatingRightWall');
+
+  const hallwayHtml = `<span class="text-xs">🚪</span><span class="vertical-text font-black text-xs text-blue-900">복 도</span>`;
+  const windowHtml = `<span class="text-xs">🪟</span><span class="vertical-text font-black text-xs text-emerald-900">창 문</span>`;
+
+  const isHallwayOnLeft = (seatingWallOrientation === 'leftHallway' && seatingViewMode === 'student') ||
+                          (seatingWallOrientation === 'leftWindow' && seatingViewMode === 'teacher');
+
+  if (isHallwayOnLeft) {
+    if (leftWall) {
+      leftWall.className = 'w-8 py-3 rounded-lg bg-blue-50/80 border border-blue-200 flex flex-col items-center justify-center gap-1 select-none shrink-0';
+      leftWall.innerHTML = hallwayHtml;
+    }
+    if (rightWall) {
+      rightWall.className = 'w-8 py-3 rounded-lg bg-emerald-50/80 border border-emerald-200 flex flex-col items-center justify-center gap-1 select-none shrink-0';
+      rightWall.innerHTML = windowHtml;
+    }
+  } else {
+    if (leftWall) {
+      leftWall.className = 'w-8 py-3 rounded-lg bg-emerald-50/80 border border-emerald-200 flex flex-col items-center justify-center gap-1 select-none shrink-0';
+      leftWall.innerHTML = windowHtml;
+    }
+    if (rightWall) {
+      rightWall.className = 'w-8 py-3 rounded-lg bg-blue-50/80 border border-blue-200 flex flex-col items-center justify-center gap-1 select-none shrink-0';
+      rightWall.innerHTML = hallwayHtml;
+    }
+  }
+}
+
+function renderSeatingGrid() {
+  const grid = document.getElementById('seatingDeskGrid');
+  if (!grid) return;
+  grid.innerHTML = '';
+
+  const cols = 6;
+  const rows = Math.ceil(seatingTotalSeats / cols);
+
+  const matrix = [];
+  let seatNum = 1;
+  for (let r = 0; r < rows; r++) {
+    const row = [];
+    for (let c = 0; c < cols; c++) {
+      row.push(seatNum <= seatingTotalSeats ? seatNum : null);
+      seatNum++;
+    }
+    matrix.push(row);
+  }
+
+  let displayMatrix = matrix;
+  if (seatingViewMode === 'teacher') {
+    displayMatrix = matrix.slice().reverse().map(row => row.slice().reverse());
+  }
+
+  const myId = currentUser?.id;
+
+  displayMatrix.forEach(rowArr => {
+    const rowDiv = document.createElement('div');
+    rowDiv.className = 'flex items-stretch gap-2 w-full flex-1';
+
+    rowArr.forEach((num, colIdx) => {
+      let marginClass = '';
+      if (seatingLayoutMode === 'pair' && colIdx % 2 === 1 && colIdx !== cols - 1) {
+        marginClass = 'mr-3 md:mr-5';
+      }
+
+      if (!num) {
+        const emptyBox = document.createElement('div');
+        emptyBox.className = `flex-1 min-h-[46px] rounded-xl p-1 pointer-events-none invisible ${marginClass}`;
+        rowDiv.appendChild(emptyBox);
+        return;
+      }
+
+      const data = seatingAssignments[num];
+      const isMyChoice = data && (data.user_id === myId || data.name === currentProfile?.name);
+      const isMoving = data && data.isMoving;
+      const isLocked = data && data.locked;
+
+      const seatBtn = document.createElement('button');
+      seatBtn.type = 'button';
+      seatBtn.onclick = () => onSeatClick(num);
+
+      let baseClass = `flex-1 min-h-[46px] rounded-xl border p-1 flex items-center justify-center transition select-none text-left relative ${marginClass} `;
+
+      if (isMoving) {
+        baseClass += 'bg-slate-100 border-slate-300 text-slate-600 border-dashed';
+        seatBtn.innerHTML = `
+          <span class="absolute top-1 right-1.5 bg-slate-200 text-slate-700 px-1 py-0.5 rounded text-[8px] font-bold">이동</span>
+          <span class="text-[11px] font-bold text-slate-500 text-center">이동수업석</span>
+        `;
+      } else if (isMyChoice) {
+        baseClass += 'bg-blue-600 border-blue-600 text-white shadow-xs';
+        seatBtn.innerHTML = `
+          <span class="absolute top-1 right-1.5 bg-white/25 px-1 py-0.5 rounded text-[8px] font-black">내자리</span>
+          <span class="text-xs sm:text-sm font-black truncate text-center px-1">${escapeHtml(data.name)}</span>
+        `;
+      } else if (isLocked) {
+        baseClass += 'bg-purple-50 border-purple-300 text-purple-900';
+        seatBtn.innerHTML = `
+          <span class="absolute top-1 right-1.5 text-[11px]">🔒</span>
+          <span class="text-xs sm:text-sm font-bold truncate text-center px-1">${escapeHtml(data.name)}</span>
+        `;
+      } else if (data) {
+        baseClass += 'bg-slate-100 border-slate-200 text-slate-800';
+        seatBtn.innerHTML = `<span class="text-xs sm:text-sm font-bold truncate text-center px-1">${escapeHtml(data.name)}</span>`;
+      } else {
+        baseClass += 'bg-white border-slate-300 text-slate-700 hover:border-blue-400 hover:shadow-xs cursor-pointer';
+        seatBtn.innerHTML = `<span class="text-xs font-semibold text-slate-300">빈자리</span>`;
+      }
+
+      seatBtn.className = baseClass;
+      rowDiv.appendChild(seatBtn);
+    });
+
+    grid.appendChild(rowDiv);
+  });
+}
+
+function renderSeatingRoster() {
+  const tbody = document.getElementById('seatingRosterTableBody');
+  if (!tbody) return;
+  tbody.innerHTML = '';
+
+  const targetClass = (activeClassNum === 'all') ? 2 : activeClassNum;
+  const classStudents = allGrade3Students.filter(s => (s.class_num || 2) === targetClass);
+
+  const rosterRows = Math.min(20, Math.max(15, Math.ceil(seatingTotalSeats / 2)));
+  const myId = currentUser?.id;
+
+  for (let i = 0; i < rosterRows; i++) {
+    const leftStudent = classStudents[i];
+    const rightStudent = classStudents[i + rosterRows];
+
+    const isLeftMe = leftStudent && (leftStudent.id === myId);
+    const isRightMe = rightStudent && (rightStudent.id === myId);
+
+    const leftNo = leftStudent?.student_no ? parseInt(leftStudent.student_no.slice(-2)) : (leftStudent ? i + 1 : '');
+    const rightNo = rightStudent?.student_no ? parseInt(rightStudent.student_no.slice(-2)) : (rightStudent ? i + rosterRows + 1 : '');
+
+    const tr = document.createElement('tr');
+    tr.className = 'hover:bg-slate-50';
+
+    tr.innerHTML = `
+      <td class="py-1 px-1.5 text-center font-mono font-bold text-slate-500 border-r border-slate-300 text-[10px] ${isLeftMe ? 'bg-blue-100 text-blue-900 font-black' : ''}">
+        ${leftNo}
+      </td>
+      <td class="py-1 px-2 text-center font-bold text-slate-900 border-r border-slate-400 text-[11px] ${isLeftMe ? 'bg-blue-100 text-blue-900 font-black' : ''}">
+        ${leftStudent ? escapeHtml(leftStudent.name) : ''}
+      </td>
+      <td class="py-1 px-1.5 text-center font-mono font-bold text-slate-500 border-r border-slate-300 text-[10px] ${isRightMe ? 'bg-blue-100 text-blue-900 font-black' : ''}">
+        ${rightNo}
+      </td>
+      <td class="py-1 px-2 text-center font-bold text-slate-900 text-[11px] ${isRightMe ? 'bg-blue-100 text-blue-900 font-black' : ''}">
+        ${rightStudent ? escapeHtml(rightStudent.name) : ''}
+      </td>
+    `;
+    tbody.appendChild(tr);
+  }
+}
+
+function updateSeatingStudentStatus() {
+  const myId = currentUser?.id;
+  let mySeatNum = null;
+
+  for (const [sNum, data] of Object.entries(seatingAssignments)) {
+    if (data && (data.user_id === myId || data.name === currentProfile?.name)) {
+      mySeatNum = sNum;
+      break;
+    }
+  }
+
+  const statusText = document.getElementById('mySeatStatusText');
+  const cancelBtn = document.getElementById('btnCancelMySeat');
+
+  if (mySeatNum) {
+    if (statusText) statusText.innerText = `선택 완료 (${mySeatNum}번 책상)`;
+    if (cancelBtn) cancelBtn.classList.remove('hidden');
+  } else {
+    if (statusText) statusText.innerText = '미선택 (빈 책상을 클릭하세요)';
+    if (cancelBtn) cancelBtn.classList.add('hidden');
+  }
+
+  const filledCount = Object.values(seatingAssignments).filter(a => a && a.name && !a.isMoving).length;
+  const fcEl = document.getElementById('seatingFilledCount');
+  const tcEl = document.getElementById('seatingTotalCount');
+  if (fcEl) fcEl.innerText = filledCount;
+  if (tcEl) tcEl.innerText = seatingTotalSeats;
+}
+
+async function onSeatClick(num) {
+  if (isCurrentTeacher()) {
+    openSeatModal(num);
+    return;
+  }
+
+  const existing = seatingAssignments[num];
+  const myId = currentUser?.id;
+
+  if (existing && existing.isMoving) {
+    alert('이 책상은 이동수업 전용 좌석으로 지정되어 있어 선택할 수 없습니다.');
+    return;
+  }
+
+  if (existing && existing.locked) {
+    alert('담임선생님이 고정석으로 지정한 자리입니다.');
+    return;
+  }
+
+  if (existing && existing.user_id && existing.user_id !== myId) {
+    alert(`이미 다른 학생(${existing.name})이 선택한 좌석입니다.`);
+    return;
+  }
+
+  if (existing && (existing.user_id === myId || existing.name === currentProfile?.name)) {
+    if (confirm('현재 좌석 선택을 취소할까요?')) {
+      delete seatingAssignments[num];
+      await syncSeatingAssignmentsToDB();
+    }
+    return;
+  }
+
+  if (confirm(`${num}번 좌석을 선택하시겠습니까?`)) {
+    for (const [sNum, data] of Object.entries(seatingAssignments)) {
+      if (data && (data.user_id === myId || data.name === currentProfile?.name)) {
+        delete seatingAssignments[sNum];
+      }
+    }
+
+    const sNo = currentProfile?.student_no ? parseInt(currentProfile.student_no.slice(-2)) : 0;
+    seatingAssignments[num] = {
+      name: currentProfile?.name || '학생',
+      no: sNo,
+      user_id: myId,
+      locked: false
+    };
+
+    await syncSeatingAssignmentsToDB();
+  }
+}
+
+async function cancelMySeatChoice() {
+  const myId = currentUser?.id;
+  let targetNum = null;
+  for (const [sNum, data] of Object.entries(seatingAssignments)) {
+    if (data && (data.user_id === myId || data.name === currentProfile?.name)) {
+      targetNum = sNum;
+      break;
+    }
+  }
+
+  if (!targetNum) return;
+  if (confirm('현재 선택한 좌석을 취소하시겠습니까?')) {
+    delete seatingAssignments[targetNum];
+    await syncSeatingAssignmentsToDB();
+  }
+}
+
+async function syncSeatingAssignmentsToDB() {
+  const targetClass = (activeClassNum === 'all') ? 2 : activeClassNum;
+  currentSeatingDoc.assignments = seatingAssignments;
+  currentSeatingDoc.updated_at = new Date();
+
+  const { error } = await supabaseClient
+    .from('seating_charts')
+    .upsert([currentSeatingDoc], { onConflict: 'class_num' });
+
+  if (error) {
+    alert('좌석 배정 저장 실패: ' + error.message);
+    return;
+  }
+  renderSeatingAll();
+}
+
+function setSeatingViewMode(mode) {
+  seatingViewMode = mode;
+  const btnS = document.getElementById('btnViewStudent');
+  const btnT = document.getElementById('btnViewTeacher');
+
+  if (mode === 'student') {
+    btnS.className = 'px-2.5 py-1.5 rounded-lg font-bold transition bg-white text-blue-600 shadow-xs flex items-center gap-1';
+    btnT.className = 'px-2.5 py-1.5 rounded-lg font-bold transition text-slate-500 hover:text-slate-800 flex items-center gap-1';
+  } else {
+    btnT.className = 'px-2.5 py-1.5 rounded-lg font-bold transition bg-white text-purple-700 shadow-xs flex items-center gap-1';
+    btnS.className = 'px-2.5 py-1.5 rounded-lg font-bold transition text-slate-500 hover:text-slate-800 flex items-center gap-1';
+  }
+  renderSeatingAll();
+}
+
+function toggleSeatingSettingPanel() {
+  const panel = document.getElementById('seatingTeacherPanel');
+  if (panel) panel.classList.toggle('hidden');
+}
+
+function setSeatingWallOrientation(val) {
+  seatingWallOrientation = val;
+  const btnH = document.getElementById('btnWallLeftHallway');
+  const btnW = document.getElementById('btnWallLeftWindow');
+  if (val === 'leftHallway') {
+    btnH.className = 'flex-1 py-1 rounded-md font-bold transition text-[11px] bg-blue-600 text-white';
+    btnW.className = 'flex-1 py-1 rounded-md font-bold transition text-[11px] text-slate-600 hover:text-blue-600';
+  } else {
+    btnW.className = 'flex-1 py-1 rounded-md font-bold transition text-[11px] bg-blue-600 text-white';
+    btnH.className = 'flex-1 py-1 rounded-md font-bold transition text-[11px] text-slate-600 hover:text-blue-600';
+  }
+  renderSeatingWalls();
+}
+
+function setSeatingLayout(val) {
+  seatingLayoutMode = val;
+  const btnP = document.getElementById('btnLayoutPair');
+  const btnS = document.getElementById('btnLayoutSingle');
+  if (val === 'pair') {
+    btnP.className = 'flex-1 py-1 rounded-md font-bold transition text-[11px] bg-purple-600 text-white';
+    btnS.className = 'flex-1 py-1 rounded-md font-bold transition text-[11px] text-slate-600 hover:text-purple-600';
+  } else {
+    btnS.className = 'flex-1 py-1 rounded-md font-bold transition text-[11px] bg-purple-600 text-white';
+    btnP.className = 'flex-1 py-1 rounded-md font-bold transition text-[11px] text-slate-600 hover:text-purple-600';
+  }
+  renderSeatingGrid();
+}
+
+function changeSeatingCount(val) {
+  seatingTotalSeats = Math.min(40, Math.max(12, parseInt(val) || 30));
+  renderSeatingAll();
+}
+
+async function saveSeatingSettingsByTeacher() {
+  if (!isCurrentTeacher()) return;
+  const targetClass = (activeClassNum === 'all') ? 2 : activeClassNum;
+
+  const doc = {
+    class_num: targetClass,
+    grade: parseInt(document.getElementById('cfgGrade')?.value) || 3,
+    period_start: document.getElementById('cfgStartDate')?.value || '',
+    period_end: document.getElementById('cfgEndDate')?.value || '',
+    teacher_name: document.getElementById('cfgTeacher')?.value.trim() || '',
+    president_name: document.getElementById('cfgPresident')?.value.trim() || '',
+    vice_name: document.getElementById('cfgVice')?.value.trim() || '',
+    wall_orientation: seatingWallOrientation,
+    layout_mode: seatingLayoutMode,
+    total_seats: seatingTotalSeats,
+    teacher_message: document.getElementById('seatingMessageDisplay')?.innerText.trim() || '',
+    assignments: seatingAssignments,
+    updated_at: new Date()
+  };
+
+  const { error } = await supabaseClient
+    .from('seating_charts')
+    .upsert([doc], { onConflict: 'class_num' });
+
+  if (error) {
+    alert('설정 저장 실패: ' + error.message);
+    return;
+  }
+
+  currentSeatingDoc = doc;
+  alert('학급 자리배치표 설정이 안전하게 저장되었습니다!');
+  renderSeatingAll();
+}
+
+async function shuffleUnassignedSeats() {
+  if (!confirm('아직 자리를 정하지 않은 학생들을 빈 책상에 무작위로 자동 배정할까요?')) return;
+  const targetClass = (activeClassNum === 'all') ? 2 : activeClassNum;
+  const classStudents = allGrade3Students.filter(s => (s.class_num || 2) === targetClass);
+
+  const assignedUserIds = Object.values(seatingAssignments).map(a => a.user_id || a.name).filter(Boolean);
+  const unassigned = classStudents.filter(s => !assignedUserIds.includes(s.id) && !assignedUserIds.includes(s.name));
+
+  unassigned.sort(() => Math.random() - 0.5);
+
+  let uIdx = 0;
+  for (let i = 1; i <= seatingTotalSeats; i++) {
+    if (!seatingAssignments[i] && uIdx < unassigned.length) {
+      const st = unassigned[uIdx++];
+      const sNo = st.student_no ? parseInt(st.student_no.slice(-2)) : 0;
+      seatingAssignments[i] = {
+        name: st.name,
+        no: sNo,
+        user_id: st.id,
+        locked: false
+      };
+    }
+  }
+
+  await syncSeatingAssignmentsToDB();
+  alert('미신청 학생들의 무작위 배정이 완료되었습니다!');
+}
+
+function openSeatModal(num) {
+  selectedModalSeatNum = num;
+  const numSpan = document.getElementById('modalSeatNumberText');
+  if (numSpan) numSpan.innerText = num;
+
+  const current = seatingAssignments[num];
+  const movingCheck = document.getElementById('modalMovingSeatCheck');
+  const isMoving = !!(current && current.isMoving);
+  if (movingCheck) movingCheck.checked = isMoving;
+  toggleMovingOption(isMoving);
+
+  const targetClass = (activeClassNum === 'all') ? 2 : activeClassNum;
+  const classStudents = allGrade3Students.filter(s => (s.class_num || 2) === targetClass);
+
+  const sel = document.getElementById('modalSeatStudentSelect');
+  if (sel) {
+    sel.innerHTML = '<option value="">[빈 책상으로 비우기]</option>' + classStudents.map(s => {
+      const sNo = s.student_no ? parseInt(s.student_no.slice(-2)) : '';
+      const isSelected = current && (current.user_id === s.id || current.name === s.name);
+      return `<option value="${s.id}|${s.name}|${sNo}" ${isSelected ? 'selected' : ''}>${sNo ? sNo + '번 ' : ''}${escapeHtml(s.name)}</option>`;
+    }).join('');
+  }
+
+  const lockCheck = document.getElementById('modalLockSeatCheck');
+  if (lockCheck) lockCheck.checked = !!(current && current.locked);
+
+  const modal = document.getElementById('teacherSeatModal');
+  if (modal) modal.classList.remove('hidden');
+  lucide.createIcons();
+}
+
+function closeSeatModal() {
+  const modal = document.getElementById('teacherSeatModal');
+  if (modal) modal.classList.add('hidden');
+  selectedModalSeatNum = null;
+}
+
+function toggleMovingOption(isMoving) {
+  const selBox = document.getElementById('modalStudentSelectContainer');
+  const lockBox = document.getElementById('modalLockContainer');
+  if (isMoving) {
+    if (selBox) selBox.classList.add('opacity-40', 'pointer-events-none');
+    if (lockBox) lockBox.classList.add('opacity-40', 'pointer-events-none');
+  } else {
+    if (selBox) selBox.classList.remove('opacity-40', 'pointer-events-none');
+    if (lockBox) lockBox.classList.remove('opacity-40', 'pointer-events-none');
+  }
+}
+
+async function saveSeatModalAssignment() {
+  if (!selectedModalSeatNum) return;
+  const isMoving = document.getElementById('modalMovingSeatCheck')?.checked;
+
+  if (isMoving) {
+    seatingAssignments[selectedModalSeatNum] = { isMoving: true };
+  } else {
+    const val = document.getElementById('modalSeatStudentSelect')?.value;
+    const isLocked = document.getElementById('modalLockSeatCheck')?.checked;
+
+    if (!val) {
+      delete seatingAssignments[selectedModalSeatNum];
+    } else {
+      const [uId, uName, uNo] = val.split('|');
+      seatingAssignments[selectedModalSeatNum] = {
+        name: uName,
+        no: parseInt(uNo) || 0,
+        user_id: uId,
+        locked: isLocked
+      };
+    }
+  }
+
+  closeSeatModal();
+  await syncSeatingAssignmentsToDB();
+}
+
+function toggleEditSeatingMessage() {
+  const disp = document.getElementById('seatingMessageDisplay');
+  const area = document.getElementById('seatingMessageInputArea');
+  const input = document.getElementById('seatingMessageInput');
+
+  if (area.classList.contains('hidden')) {
+    input.value = disp.innerText;
+    disp.classList.add('hidden');
+    area.classList.remove('hidden');
+    input.focus();
+  } else {
+    area.classList.add('hidden');
+    disp.classList.remove('hidden');
+  }
+}
+
+async function saveSeatingMessageOnly() {
+  const input = document.getElementById('seatingMessageInput');
+  const text = input.value.trim();
+  if (!text) return alert('한마디 내용을 입력해주세요.');
+
+  document.getElementById('seatingMessageDisplay').innerText = text;
+  toggleEditSeatingMessage();
+  await saveSeatingSettingsByTeacher();
+}
+
+function printSeatingChart() {
+  const mainBoardHtml = document.getElementById('seatingMainBoard')?.innerHTML;
+  if (!mainBoardHtml) return;
+
+  const targetClass = (activeClassNum === 'all') ? 2 : activeClassNum;
+  const printWindow = window.open('', '_blank', 'width=1100,height=850');
+
+  printWindow.document.write(`
+    <!DOCTYPE html>
+    <html lang="ko">
+    <head>
+      <meta charset="UTF-8">
+      <title>3학년 ${targetClass}반 자리배치표</title>
+      <script src="https://cdn.tailwindcss.com"></script>
+      <style>
+        @import url('https://cdn.jsdelivr.net/gh/orioncactus/pretendard/dist/web/static/pretendard.css');
+        * { font-family: 'Pretendard', sans-serif; }
+        .vertical-text { writing-mode: vertical-rl; text-orientation: upright; letter-spacing: 0.35rem; }
+        @page { size: A4 landscape; margin: 6mm 8mm; }
+        body { padding: 0; margin: 0; background: white; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+      </style>
+    </head>
+    <body class="p-4">
+      <div class="max-w-[1400px] mx-auto border-none">
+        ${mainBoardHtml}
+      </div>
+      <script>
+        window.onload = function() {
+          const editBtn = document.getElementById('btnEditSeatingMessage');
+          if (editBtn) editBtn.style.display = 'none';
+          const area = document.getElementById('seatingMessageInputArea');
+          if (area) area.style.display = 'none';
+          window.print();
+        };
+      </script>
+    </body>
+    </html>
+  `);
+  printWindow.document.close();
 }
