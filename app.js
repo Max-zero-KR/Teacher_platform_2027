@@ -6852,9 +6852,22 @@ async function syncSeatingAssignmentsToDB() {
   currentSeatingDoc.assignments = seatingAssignments;
   currentSeatingDoc.updated_at = new Date();
 
-  const { error } = await supabaseClient
+  // 1) 학생은 주로 자리만 바꾸므로 UPDATE를 우선 안전하게 시도
+  let { error } = await supabaseClient
     .from('seating_charts')
-    .upsert([currentSeatingDoc], { onConflict: 'class_num' });
+    .update({
+      assignments: seatingAssignments,
+      updated_at: new Date()
+    })
+    .eq('class_num', targetClass);
+
+  // 2) 최초 등록이라 행이 없는 경우에만 upsert 실행
+  if (error) {
+    const res = await supabaseClient
+      .from('seating_charts')
+      .upsert([currentSeatingDoc], { onConflict: 'class_num' });
+    error = res.error;
+  }
 
   if (error) {
     alert('좌석 배정 저장 실패: ' + error.message);
@@ -7041,6 +7054,14 @@ async function saveSeatModalAssignment() {
       delete seatingAssignments[selectedModalSeatNum];
     } else {
       const [uId, uName, uNo] = val.split('|');
+
+      // ★ [핵심] 다른 책상에 이미 앉아있던 학생이면 그 자리에서 자동으로 제외시킴 (중복 방지)
+      for (const [sNum, data] of Object.entries(seatingAssignments)) {
+        if (sNum !== String(selectedModalSeatNum) && data && (data.user_id === uId || data.name === uName)) {
+          delete seatingAssignments[sNum];
+        }
+      }
+
       seatingAssignments[selectedModalSeatNum] = {
         name: uName,
         no: parseInt(uNo) || 0,
