@@ -7106,7 +7106,7 @@ function printSeatingChart() {
   if (!mainBoardHtml) return;
 
   const targetClass = (activeClassNum === 'all') ? 2 : activeClassNum;
-  const printWindow = window.open('', '_blank', 'width=1100,height=850');
+  const printWindow = window.open('', '_blank', 'width=1150,height=850');
 
   printWindow.document.write(`
     <!DOCTYPE html>
@@ -7117,23 +7117,124 @@ function printSeatingChart() {
       <script src="https://cdn.tailwindcss.com"></script>
       <style>
         @import url('https://cdn.jsdelivr.net/gh/orioncactus/pretendard/dist/web/static/pretendard.css');
-        * { font-family: 'Pretendard', sans-serif; }
-        .vertical-text { writing-mode: vertical-rl; text-orientation: upright; letter-spacing: 0.35rem; }
-        @page { size: A4 landscape; margin: 6mm 8mm; }
-        body { padding: 0; margin: 0; background: white; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+        * { 
+          font-family: 'Pretendard', sans-serif;
+          box-sizing: border-box !important;
+          page-break-inside: avoid !important;
+          break-inside: avoid !important;
+        }
+
+        .vertical-text { 
+          writing-mode: vertical-rl; 
+          text-orientation: upright; 
+          letter-spacing: 0.3rem; 
+        }
+
+        /* A4 가로 규격 및 여백 최소화 */
+        @page { 
+          size: A4 landscape; 
+          margin: 5mm 7mm !important; 
+        }
+
+        html, body { 
+          width: 100% !important; 
+          height: 100% !important; 
+          margin: 0 !important; 
+          padding: 0 !important; 
+          background: white !important; 
+          overflow: hidden !important; 
+          -webkit-print-color-adjust: exact; 
+          print-color-adjust: exact; 
+        }
+
+        /* 1페이지 맞춤 전용 높이 컨테이너 (넘침 원천 차단) */
+        .print-page-wrapper {
+          width: 100% !important;
+          height: 100vh !important;
+          max-height: 196mm !important;
+          display: flex !important;
+          flex-direction: column !important;
+          justify-content: space-between !important;
+          padding: 0 !important;
+          margin: 0 !important;
+          border: none !important;
+        }
+
+        /* 1. 상단 타이틀 컴팩트화 */
+        .border-b-2 {
+          padding-bottom: 4px !important;
+          margin-bottom: 2px !important;
+        }
+        #seatingBoardMainTitle {
+          font-size: 19px !important;
+          line-height: 1.2 !important;
+        }
+
+        /* 2. [핵심] 배치도와 명렬표가 아래로 떨어지지 않고 반드시 '좌우 나란히' 배치되도록 강제 고정 */
+        .flex.flex-col.lg\:flex-row {
+          display: flex !important;
+          flex-direction: row !important;
+          align-items: stretch !important;
+          gap: 10px !important;
+          flex: 1 !important;
+          min-height: 0 !important;
+          margin: 3px 0 !important;
+        }
+        .w-full.lg\:w-80 {
+          width: 290px !important;
+          max-width: 290px !important;
+          flex-shrink: 0 !important;
+        }
+
+        /* 3. 책상 매트릭스 높이 최적화 (높이 압축) */
+        #seatingDeskGrid {
+          gap: 4px !important;
+        }
+        #seatingDeskGrid button, #seatingDeskGrid .min-h-\[46px\] {
+          min-height: 37px !important;
+          height: 37px !important;
+          padding: 1px 2px !important;
+        }
+
+        /* 칠판, 교실뒤편 바 높이 압축 */
+        #seatingTopBoardArea div, #seatingBottomBoardArea div {
+          padding-top: 3px !important;
+          padding-bottom: 3px !important;
+        }
+
+        /* 4. 우측 명렬표 줄 간격 최적화 */
+        #seatingRosterTableBody td {
+          padding: 1.5px 3px !important;
+          font-size: 10.5px !important;
+        }
+
+        /* 5. 하단 담임 한마디 상자 압축 (1페이지 안착) */
+        .bg-amber-50\/60 {
+          padding: 5px 8px !important;
+          margin-top: 2px !important;
+          background: #fffdf8 !important;
+          border: 1.2px solid #cbd5e1 !important;
+        }
+        #seatingMessageDisplay {
+          font-size: 11px !important;
+          line-height: 1.35 !important;
+        }
+
+        /* 인쇄 시 불필요한 수정 버튼 숨김 */
+        #btnEditSeatingMessage, #seatingMessageInputArea {
+          display: none !important;
+        }
       </style>
     </head>
-    <body class="p-4">
-      <div class="max-w-[1400px] mx-auto border-none">
+    <body>
+      <div class="print-page-wrapper">
         ${mainBoardHtml}
       </div>
       <script>
         window.onload = function() {
-          const editBtn = document.getElementById('btnEditSeatingMessage');
-          if (editBtn) editBtn.style.display = 'none';
-          const area = document.getElementById('seatingMessageInputArea');
-          if (area) area.style.display = 'none';
-          window.print();
+          setTimeout(function() {
+            window.print();
+          }, 250);
         };
       </script>
     </body>
